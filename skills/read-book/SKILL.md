@@ -7,7 +7,7 @@ description: Open an EPUB or PDF in the book reader in Claude Code's side panel 
 
 The reader is a local web app: `reader/reader.py` runs a small server on http://localhost:47210 that serves the user's library and remembers each book's position. Pages, contents, search, themes and progress all happen in the page itself. Position, the text on screen and the last selected text are saved on this Mac, so Claude can see them.
 
-The library comes from the user's personal book folders (`~/Documents/personal/learning/books`, `~/Documents/personal/sources/...`, Apple Books in iCloud, `~/Books`); `reader.py folders` lists them.
+The library is the user's one book folder, `~/Documents/personal/books`: a folder per book holding the book file, its chapter text and index (`INDEX.md`) and its download receipt. `reader.py folders` lists what is scanned.
 
 ## Open a book
 
@@ -31,7 +31,7 @@ Run `python3 ~/.claude/skills/read-book/reader/reader.py status`. It prints the 
 
 - "this page" / "this paragraph" means the text on screen; "this" or "the highlighted part" means the selection when it is recent.
 - Explain and summarize in your own words. Quote only a short phrase when you need to point at something.
-- For "summarize this chapter" or anything wider than the screen, the personal library usually has the book as text: `~/Documents/personal/learning/books/book-<id>/INDEX.md` lists sections and their text files (the id is the one `status` prints). Read only the relevant section.
+- For "summarize this chapter" or anything wider than the screen, use the book's chapter text: `status` prints its `INDEX.md` (in the book's folder in `~/Documents/personal/books`), which lists sections and their text files. Read only the relevant section.
 
 ## Moving the reader for them
 

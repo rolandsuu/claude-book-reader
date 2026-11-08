@@ -38,9 +38,7 @@ PORT = int(os.environ.get("BOOK_READER_PORT", "47210"))
 BASE_URL = f"http://localhost:{PORT}"
 
 DEFAULT_FOLDERS = [
-    "~/Documents/personal/learning/books",
-    "~/Documents/personal/sources/books",
-    "~/Documents/personal/sources/acquisitions",
+    "~/Documents/personal/books",  # one folder per book: the book file, its chapter index, its receipt
     "~/Library/Mobile Documents/iCloud~com~apple~iBooks/Documents",
     "~/Books",
 ]
@@ -303,7 +301,7 @@ def build_library(force=False):
             if unpacked and not cloud:
                 cloud = is_dataless(p / "META-INF" / "container.xml") if (p / "META-INF").is_dir() else True
             t = None
-            if ID_DIR.match(p.parent.name):
+            if ID_DIR.match(p.parent.name) or (p.parent / "INDEX.md").is_file():
                 # The personal library keeps a title in INDEX.md, sometimes only in the sibling
                 # folder of the same id in another library folder.
                 t = index_title(p.parent)
@@ -376,12 +374,26 @@ def build_library(force=False):
         groups = {}
         for b in merged.values():
             groups.setdefault(find(b["id"]), []).append(b)
+        roots = [str(Path(os.path.expanduser(f)).resolve()) for f in cfg.get("folders", [])]
+
+        def folder_rank(b):
+            p = str(Path(b["path"]).resolve())
+            return next((i for i, r in enumerate(roots) if p.startswith(r + os.sep)), len(roots))
+
         final = {}
         for copies in groups.values():
-            copies.sort(key=lambda b: (-(progress.get(b["id"], {}).get("updated") or 0), b["cloud"], b["unpacked"]))
-            final[copies[0]["id"]] = copies[0]
+            # The id: the one with reading progress, else one with a learning index (book-<id>).
+            copies.sort(key=lambda b: (-(progress.get(b["id"], {}).get("updated") or 0),
+                                       not ID_DIR.match(Path(b["path"]).parent.name), b["cloud"], b["unpacked"]))
+            book = dict(copies[0])
+            # The file: a downloaded copy from the first folder listed (~/Documents/personal/books).
+            src = min(copies, key=lambda b: (b["cloud"], folder_rank(b), b["unpacked"]))
+            if src is not copies[0]:
+                book.update({k: src[k] for k in ("path", "unpacked", "size", "cloud")})
+                book["cover"] = None if src["cloud"] else (src["cover"] or book["cover"])
+            final[book["id"]] = book
             for other in copies[1:]:
-                final[copies[0]["id"]].setdefault("aliases", []).append(other["id"])
+                book.setdefault("aliases", []).append(other["id"])
         if dirty:
             live = {b["path"] for c in books.values() for b in c}
             update_state(lambda s: s.update(meta={k: v for k, v in meta_cache.items() if k in live}))
@@ -411,7 +423,17 @@ def public(book, state=None):
         "unpacked": book.get("unpacked", False),
         "progress": {k: pr.get(k) for k in ("location", "percent", "label", "page", "pages", "updated") if k in pr},
         "url": f"{BASE_URL}/read/{book['id']}",
+        "index": chapter_index(book),
     }
+
+
+def chapter_index(book):
+    """The book's chapter text and index (INDEX.md) beside its file, if it has one."""
+    p = Path(book["path"])
+    for d in (p.parent, p) if p.is_dir() else (p.parent,):
+        if (d / "INDEX.md").is_file():
+            return str(d / "INDEX.md")
+    return None
 
 
 def norm(s):
@@ -761,6 +783,8 @@ def print_status():
         where = f"page {pr['page']} of {pr['pages']}" + (f", {where}" if where and "page" not in where.lower() else "")
     print(f"Position: {where} at {pct}, updated {ago(pr.get('updated'))}")
     print(f"URL: {b['url']}")
+    if b.get("index"):
+        print(f"Chapter text and index: {b['index'].replace(str(Path.home()), '~')}")
     sel = d.get("selection")
     if sel:
         print(f"\nLast selected text ({ago(sel['updated'])}, in {sel.get('title') or 'another book'}):")

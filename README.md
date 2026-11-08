@@ -24,7 +24,7 @@ Needs `python3` (the one macOS ships is enough) and the Claude Code desktop app 
 - `skills/read-book`: the skill, and the reader itself: `reader/reader.py` (a small local server on http://localhost:47210 using only the Python standard library, plus a CLI: `open`, `list`, `status`, `add`, `folders`, `start`, `stop`) and the web app in `reader/web`.
 - `skills/books`: the `/books` command.
 
-The library is built from `~/Documents/personal/learning/books`, `~/Documents/personal/sources/books` and `~/Documents/personal/sources/acquisitions`, Apple Books in iCloud and `~/Books`. Folders that don't exist are skipped. Add a book or a folder with `python3 ~/.claude/skills/read-book/reader/reader.py add <path>`.
+The library is built from `~/Documents/personal/books` (one folder per book: the book file, its chapter text and index, its download receipt), then Apple Books in iCloud and `~/Books`; the folder list is in `~/Library/Application Support/Book Reader/config.json`. Folders that don't exist are skipped. A book found in several places is shown once: it keeps the id that holds its reading position, and opens the copy from the first folder in that list. Add a book or a folder with `python3 ~/.claude/skills/read-book/reader/reader.py add <path>`.
 
 Reading positions and settings stay on each computer, in `~/Library/Application Support/Book Reader/`.
 
