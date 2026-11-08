@@ -11,7 +11,14 @@ for skill in "$here"/skills/*/; do
   name=$(basename "$skill")
   target="$dest/$name"
   if [ -L "$target" ]; then
-    rm "$target"
+    case "$(readlink "$target")" in
+      "$here"/*) rm "$target" ;;
+      *)
+        # A link to a copy kept elsewhere is the user's own install: leave it alone.
+        echo "Kept your existing $name skill ($target -> $(readlink "$target")). Remove that link and rerun to use this repo's copy."
+        continue
+        ;;
+    esac
   elif [ -e "$target" ]; then
     backup="$target.backup-$(date +%Y%m%d%H%M%S)"
     mv "$target" "$backup"
