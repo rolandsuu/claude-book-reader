@@ -426,6 +426,8 @@ async function EpubEngine(book, ui) {
       html, body { background: transparent !important; }
       body { color: ${dark ? '#e2e2e2' : '#141414'} !important; }
       a { color: inherit !important; }
+      a[href] { text-decoration: underline !important; text-decoration-color: rgba(128,128,128,.55) !important; text-underline-offset: 2px; cursor: pointer; }
+      a[href]:hover { text-decoration-color: currentColor !important; }
       ::selection { background: rgba(128,128,128,.38); }`;
     if (dark) css += `body *:not(img):not(svg):not(svg *):not(video):not(image) { color: inherit !important; background-color: transparent !important; border-color: #3a3a3a !important; }`;
     if (settings.font !== 'original') {
@@ -443,11 +445,30 @@ async function EpubEngine(book, ui) {
     (doc.head || doc.documentElement).append(st); // keep it last so it wins
   };
   const wheel = makeWheelTurner(self);
+  let userMoved = 0; // when the reader last scrolled or pressed a key: a jump in progress stops re-aiming
+  const markMoved = () => { userMoved = performance.now(); };
+  for (const t of ['wheel', 'touchmove', 'keydown']) ui.stage.addEventListener(t, markMoved, { passive: true });
   rendition.hooks.content.register((contents) => {
     styleContents(contents);
     const doc = contents.document;
     doc.addEventListener('keydown', ui.onKey);
     doc.addEventListener('wheel', wheel, { passive: false });
+    for (const t of ['wheel', 'touchmove', 'keydown']) doc.addEventListener(t, markMoved, { passive: true });
+    // Links. The book's frame is sandboxed and may not open tabs, so web links open from the reader
+    // page instead; links inside the book go through display(), which lands on the target reliably.
+    // Capture phase, so epub.js's own link handler never runs.
+    doc.addEventListener('click', (e) => {
+      const a = e.button === 0 && e.target.closest?.('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href') || '';
+      e.preventDefault();
+      e.stopPropagation();
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href)) { window.open(href, '_blank', 'noopener'); return; }
+      const section = ebook.spine.get(contents.sectionIndex);
+      if (!section) return;
+      const u = new URL(href, `http://book/${section.href}`);
+      display(decodeURIComponent(u.pathname.slice(1)) + u.hash);
+    }, true);
     doc.addEventListener('click', (e) => {
       if (!paged || e.target.closest('a[href]')) return;
       const sel = contents.window.getSelection();
@@ -587,14 +608,64 @@ async function EpubEngine(book, ui) {
   }, () => tocDone());
 
   // epub.js aims at a spot before the chapter's styles and font size have reflowed it, so the first
-  // landing is short of the target. Once the layout settles, aim again (the view is loaded by then).
+  // landing is short of the target. Paged: once the layout settles, aim again (the view is loaded).
   const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 150))));
+  // Scrolled: epub.js then keeps loading and re-measuring the chapters around the target, and its
+  // scroll corrections for them don't add up, so the page drifts away. Hold the target at the top
+  // until the layout has been quiet for a moment (at most 5 s), or until the reader moves.
+  const layoutKey = () => [...ui.view.querySelectorAll('.epub-view')].map((v) => `${v.getAttribute('ref')}:${v.offsetHeight}`).join(',');
+  const targetTop = (target) => {
+    const sec = ebook.spine.get(target) || sectionFor(target);
+    const c = sec && rendition.getContents().find((x) => x.sectionIndex === sec.index);
+    if (!c?.window?.frameElement) return null;
+    let rect = null;
+    if (target.startsWith('epubcfi(')) {
+      try {
+        const r = c.range(target);
+        rect = r.collapsed ? null : r.getClientRects()[0] || null;
+        if (!rect) { // a point: measure the character or the element right at it
+          let n = r.startContainer;
+          if (n.nodeType === 1 && n.childNodes[r.startOffset]) n = n.childNodes[r.startOffset];
+          if (n.nodeType === 3) {
+            const one = c.document.createRange();
+            const at = n === r.startContainer ? Math.min(r.startOffset, n.length) : 0;
+            one.setStart(n, at);
+            one.setEnd(n, Math.min(at + 1, n.length));
+            rect = one.getClientRects()[0] || n.parentElement?.getBoundingClientRect() || null;
+          } else rect = n.getBoundingClientRect?.() || null;
+        }
+      } catch { return null; }
+    } else {
+      const hash = decodeURIComponent(target.split('#')[1] || '');
+      const el = hash ? c.document.getElementById(hash) : c.document.body;
+      rect = el?.getBoundingClientRect() || null;
+    }
+    return rect ? c.window.frameElement.getBoundingClientRect().top + rect.top : null;
+  };
+  const pin = async (target, started) => {
+    const t0 = performance.now();
+    let calm = t0, key = layoutKey();
+    while (userMoved < started && performance.now() - t0 < 5000 && performance.now() - calm < 700) {
+      await new Promise((r) => setTimeout(r, 40));
+      const k = layoutKey();
+      if (k !== key) { key = k; calm = performance.now(); }
+      const box = ui.view.querySelector('.epub-container');
+      const y = box && targetTop(target);
+      if (y == null) { calm = performance.now(); continue; }
+      const off = y - box.getBoundingClientRect().top;
+      if (Math.abs(off) > 2) { box.scrollTop += off; calm = performance.now(); }
+    }
+  };
   const display = async (target) => {
     if (target) want = target;
     inFlight++;
+    const started = performance.now();
     try {
       await rendition.display(target);
-      if (target && /[#!]/.test(target)) { await settle(); await rendition.display(target); }
+      if (target && /[#!]/.test(target)) {
+        if (!paged) await pin(target, started);
+        else { await settle(); if (userMoved < started) await rendition.display(target); }
+      }
     } catch (e) {
       console.warn('display failed', target, e);
       const s = sectionFor(target);
@@ -602,6 +673,9 @@ async function EpubEngine(book, ui) {
     } finally {
       inFlight--;
       setTimeout(releaseResize, 0);
+      // The hold moved the page after epub.js last reported where it is: ask again, so the
+      // chapter label and the saved position match the screen.
+      if (!paged && !inFlight) rendition.reportLocation();
     }
   };
 
